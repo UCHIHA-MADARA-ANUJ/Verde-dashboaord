@@ -51,3 +51,14 @@ After deployment, open:
 ```
 
 It shows which environment variables are present without exposing secret values.
+
+
+## API Implementation Status
+
+All planned Verde V3 API routes are implemented in code. See:
+
+```txt
+docs/API_IMPLEMENTATION_STATUS.md
+```
+
+Secrets are intentionally not committed, even for private repositories. Add real keys through `.env.local` locally or Vercel Environment Variables in production.

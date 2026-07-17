@@ -30,6 +30,49 @@ async function callGemini(prompt: string) {
   return json?.candidates?.[0]?.content?.parts?.[0]?.text as string | undefined;
 }
 
+async function callOpenRouter(prompt: string) {
+  const key = process.env.OPENROUTER_API_KEY;
+  if (!key) return null;
+
+  const model = process.env.OPENROUTER_MODEL || 'google/gemini-2.0-flash-001';
+  const res = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      authorization: `Bearer ${key}`,
+      'HTTP-Referer': process.env.NEXT_PUBLIC_APP_URL || 'https://verde-tech.local',
+      'X-Title': 'Verde Tech V3 Command Center'
+    },
+    body: JSON.stringify({
+      model,
+      messages: [
+        { role: 'system', content: 'You are Verde AI, a concise plant-care diagnosis assistant for an IoT irrigation exhibition.' },
+        { role: 'user', content: prompt }
+      ],
+      temperature: 0.35,
+      max_tokens: 700
+    })
+  });
+
+  if (!res.ok) throw new Error(`OpenRouter failed: ${res.status} ${await res.text()}`);
+  const json = await res.json();
+  return json?.choices?.[0]?.message?.content as string | undefined;
+}
+
+async function callTreatmentAI(prompt: string) {
+  // Gemini direct is primary. OpenRouter is an optional backup/fallback if the user adds a key later.
+  try {
+    const gemini = await callGemini(prompt);
+    if (gemini) return { text: gemini, provider: 'gemini' };
+  } catch (error) {
+    if (!process.env.OPENROUTER_API_KEY) throw error;
+  }
+
+  const openrouter = await callOpenRouter(prompt);
+  if (openrouter) return { text: openrouter, provider: 'openrouter' };
+  return { text: null, provider: 'none' };
+}
+
 export async function POST(req: Request) {
   try {
     const plantKey = process.env.PLANT_ID_API_KEY;
@@ -85,7 +128,8 @@ export async function POST(req: Request) {
     const confidence = diseaseSuggestion?.probability ?? plantSuggestion?.probability ?? isHealthyProbability ?? null;
 
     const geminiPrompt = `You are Verde AI for a school IoT plant-care exhibition in Delhi. Convert this plant diagnostic data into a concise, friendly treatment guide for dashboard display. Plant: ${plantName}. Disease/stress: ${diseaseName}. Confidence: ${confidence}. Return a short summary and 5 practical treatment steps. Avoid dangerous chemical instructions. Raw Plant.id JSON: ${JSON.stringify(plantJson).slice(0, 6000)}`;
-    const geminiText = await callGemini(geminiPrompt);
+    const aiResult = await callTreatmentAI(geminiPrompt);
+    const geminiText = aiResult.text;
 
     const summary = geminiText || `Plant: ${plantName}. Assessment: ${diseaseName}. Confidence: ${confidence == null ? 'not available' : Math.round(Number(confidence) * 100) + '%'}. Add Gemini API key for detailed treatment guidance.`;
 
@@ -100,7 +144,7 @@ export async function POST(req: Request) {
         severity: confidence && confidence > 0.75 ? 'medium' : 'low',
         summary,
         treatment_steps: geminiText ? geminiText.split('\n').filter(Boolean).slice(0, 8) : [],
-        raw_response: plantJson
+        raw_response: { plant_id: plantJson, treatment_ai_provider: aiResult.provider }
       })
       .select('*')
       .single();
